@@ -1,2 +1,2 @@
 # picgroup
-Stupid small GoLang programme to grouping the image automatically by YM or Y
+Stupid small GoLang program to grouping the image automatically by YM or Y
