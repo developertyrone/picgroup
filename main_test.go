@@ -1,12 +1,19 @@
 package main
 
-import (
-	"os"
-	"testing"
-)
+import "testing"
 
-func BenchmarkFileEntries(b *testing.B) {
-	var entries = make(map[string]os.FileInfo)
+func BenchmarkFileOrganzier(b *testing.B) {
 
-	addFileEntries("/Users/superkufu/Desktop/testimage2", entries)
+	parseInput("/Users/superkufu/Desktop/testimage2", "ymd", "generated", "seq", "1", "copy")
+	addFileEntries(src_path, &fentries)
+	orgnizeFiles()
+	clear()
+}
+
+func BenchmarkConcurrentFileOrganzier(b *testing.B) {
+
+	parseInput("/Users/superkufu/Desktop/testimage2", "ymd", "generated", "con", "1", "copy")
+	addFileEntries(src_path, &fentries)
+	orgnizeFiles()
+	clear()
 }
