@@ -95,6 +95,12 @@ func parseInput(src, format, gen, copy, verbose, group string) {
 }
 
 func orgnizeFiles() {
+
+	if verbose_mode == "2" {
+		println("Generated folders:  ", len(date_folders))
+		println("All processed files entries: ", len(fentries))
+	}
+
 	if len(date_folders) > 0 {
 
 		genFolder(src_path, generated)
@@ -159,14 +165,14 @@ func addFileEntries(from_path string, entries *[]FileData) {
 	}
 
 	if verbose_mode == "1" {
-		println("Number of files: ", len(files))
+		println(from_path, "has ", len(files), " files")
 	}
 
 	for _, file := range files {
 		if file.IsDir() {
 			//addFileEntries(, entries)
 			//println("folder", path.Join(from_path, file.Name()))
-			if file.Name() != generated { //prevent rescan moved files
+			if file.Name() != generated && !strings.HasPrefix(file.Name(), ".") && !strings.HasPrefix(file.Name(), "@") { //prevent rescan moved files
 				addFileEntries(path.Join(from_path, file.Name()), entries)
 			}
 		} else {
@@ -219,20 +225,26 @@ func readMediaInfo(filePath string) string {
 	var ext = strings.ToUpper(filepath.Ext(filePath))
 
 	switch ext {
-	case ".JPG", ".JPEG", ".PNG":
+	case ".JPG", ".JPEG", ".PNG", ".ARW":
 		imgFile, err = os.Open(filePath)
 		if err != nil {
-			log.Fatal(err.Error())
+			//log.Fatal(err.Error())
+			log.Println(err.Error())
+			return ""
 		}
 
 		metaData, err = exif.Decode(imgFile)
 		if err != nil {
-			log.Fatal(err.Error())
+			//log.Fatal(err.Error())
+			log.Println(err.Error())
+			return ""
 		}
 
 		jsonByte, err = metaData.MarshalJSON()
 		if err != nil {
-			log.Fatal(err.Error())
+			//log.Fatal(err.Error())
+			log.Println(err.Error())
+			return ""
 		}
 
 		jsonString = string(jsonByte)

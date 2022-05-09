@@ -15,7 +15,7 @@ Stupid small GoLang program to grouping the image automatically by YearMonth or
 7. generate folder according to settings and files entries [done]
 8. move files to correspondent folder 
 9. make things concurrency mode (if possible) [done]
-10. support more file format 
+10. support more file format [ARW, mp4]
 11. fuzzy file grouping 
 12. Read number of cpu to concurrency [done]
 13. Enhance to integrate with golang cli framework
@@ -28,4 +28,3 @@ Stupid small GoLang program to grouping the image automatically by YearMonth or
 
 
 # Cheatsheet
-
