@@ -13,8 +13,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/rwcarlsen/goexif/exif"
+	"github.com/dsoprea/go-exif/v3"
 	"github.com/tidwall/gjson"
+
+	"encoding/json"
 )
 
 // --- Overridable EXIF reader function (used for testing) ---
@@ -25,25 +27,39 @@ func defaultReadMediaInfo(filePath string) string {
 	ext := strings.ToUpper(filepath.Ext(filePath))
 	switch ext {
 	case ".JPG", ".JPEG", ".PNG", ".ARW":
-		imgFile, err := os.Open(filePath)
+		rawExif, err := exif.SearchFileAndExtractExif(filePath)
 		if err != nil {
-			log.Println(err.Error())
+			log.Printf("No EXIF in %s: %v", filePath, err)
 			return ""
 		}
-		defer imgFile.Close()
-
-		metaData, err := exif.Decode(imgFile)
+		flatExif, _, err := exif.GetFlatExifData(rawExif, nil)
 		if err != nil {
-			log.Println(err.Error())
+			log.Printf("Error retrieving EXIF data for %s: %v", filePath, err)
 			return ""
 		}
-
-		jsonByte, err := metaData.MarshalJSON()
+		metadata := make(map[string]string)
+		// Look for DateTimeOriginal first.
+		for _, item := range flatExif {
+			if item.TagName == "DateTimeOriginal" {
+				metadata["DateTimeOriginal"] = item.FormattedFirst
+				break
+			}
+		}
+		// Fallback to DateTime if DateTimeOriginal is not available.
+		if metadata["DateTimeOriginal"] == "" {
+			for _, item := range flatExif {
+				if item.TagName == "DateTime" {
+					metadata["DateTimeOriginal"] = item.FormattedFirst
+					break
+				}
+			}
+		}
+		jsonBytes, err := json.Marshal(metadata)
 		if err != nil {
-			log.Println(err.Error())
+			log.Printf("Error marshaling EXIF metadata for %s: %v", filePath, err)
 			return ""
 		}
-		return string(jsonByte)
+		return string(jsonBytes)
 	default:
 		return ""
 	}

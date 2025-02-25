@@ -23,6 +23,7 @@ go test -bench=.
 
 # Run specific benchmark
 go test -bench=BenchmarkFileOrganizerSequential
+go test -bench=BenchmarkFileOrganizerConcurrent
 
 # Show coverage percentage
 go test -cover

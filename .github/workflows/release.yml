@@ -1,0 +1,81 @@
+name: Build and Release PicGroup
+
+on:
+  push:
+    tags:
+      - 'v*'  # Trigger on version tags like v0.1.0, v1.0.0, etc.
+
+jobs:
+  build:
+    name: Build and Release
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.20'
+          check-latest: true
+
+      - name: Get version from tag
+        id: get_version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_ENV
+        
+      - name: Build for Windows, macOS, and Linux
+        run: |
+          # Create builds directory
+          mkdir -p builds
+          
+          # Windows builds
+          GOOS=windows GOARCH=amd64 go build -o builds/picgroup-windows-amd64.exe ./cmd/main.go
+          GOOS=windows GOARCH=386 go build -o builds/picgroup-windows-386.exe ./cmd/main.go
+          
+          # macOS builds
+          GOOS=darwin GOARCH=amd64 go build -o builds/picgroup-macos-amd64 ./cmd/main.go
+          GOOS=darwin GOARCH=arm64 go build -o builds/picgroup-macos-arm64 ./cmd/main.go
+          
+          # Linux builds
+          GOOS=linux GOARCH=amd64 go build -o builds/picgroup-linux-amd64 ./cmd/main.go
+          GOOS=linux GOARCH=386 go build -o builds/picgroup-linux-386 ./cmd/main.go
+          GOOS=linux GOARCH=arm64 go build -o builds/picgroup-linux-arm64 ./cmd/main.go
+          
+          # Create ZIP archives for each build
+          cd builds
+          for file in *; do
+            zip "${file}.zip" "$file"
+          done
+          cd ..
+
+      - name: Create Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: PicGroup ${{ env.VERSION }}
+          draft: false
+          prerelease: false
+          files: |
+            builds/*.zip
+          body: |
+            # PicGroup ${{ env.VERSION }}
+            
+            ## Changes in this version
+            
+            <!-- Add your release notes here -->
+            
+            ## Downloads
+            
+            ### Windows
+            - [Windows (64-bit)](https://github.com/developertyrone/picgroup/releases/download/v${{ env.VERSION }}/picgroup-windows-amd64.exe.zip)
+            - [Windows (32-bit)](https://github.com/developertyrone/picgroup/releases/download/v${{ env.VERSION }}/picgroup-windows-386.exe.zip)
+            
+            ### macOS
+            - [macOS (Intel)](https://github.com/developertyrone/picgroup/releases/download/v${{ env.VERSION }}/picgroup-macos-amd64.zip)
+            - [macOS (Apple Silicon)](https://github.com/developertyrone/picgroup/releases/download/v${{ env.VERSION }}/picgroup-macos-arm64.zip)
+            
+            ### Linux
+            - [Linux (64-bit)](https://github.com/developertyrone/picgroup/releases/download/v${{ env.VERSION }}/picgroup-linux-amd64.zip)
+            - [Linux (32-bit)](https://github.com/developertyrone/picgroup/releases/download/v${{ env.VERSION }}/picgroup-linux-386.zip)
+            - [Linux (ARM64)](https://github.com/developertyrone/picgroup/releases/download/v${{ env.VERSION }}/picgroup-linux-arm64.zip)
