@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"runtime"
 
 	"github.com/developertyrone/picgroup/pkg/organizer"
 )
@@ -23,6 +24,7 @@ func main() {
 	groupMode := flag.String("g", "move", "Grouping mode (move/copy)")
 	copyMode := flag.String("m", "seq", "File copy mode (seq/con)")
 	verboseMode := flag.String("v", "0", "Verbose mode (0/1)")
+	workerCount := flag.Int("w", runtime.NumCPU(), "Number of worker threads (for concurrent mode)")
 
 	flag.Parse()
 
@@ -33,5 +35,5 @@ func main() {
 	}
 
 	// Execute the organizer with parsed flag values
-	organizer.Execute(*srcPath, *folderFormat, *generated, *copyMode, *verboseMode, *groupMode)
+	organizer.Execute(*srcPath, *folderFormat, *generated, *copyMode, *verboseMode, *groupMode, *workerCount)
 }

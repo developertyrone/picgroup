@@ -16,6 +16,7 @@ import (
 	"github.com/tidwall/gjson"
 
 	"encoding/json"
+	"runtime/debug"
 )
 
 // --- Overridable EXIF reader function (used for testing) ---
@@ -101,11 +102,15 @@ func NewOrganizer(srcPath, folderFormat, generated, copyMode, verboseMode, group
 }
 
 // Execute creates an Organizer with the provided parameters and runs the organization process.
-func Execute(srcPath, folderFormat, generated, copyMode, verboseMode, groupMode string) {
+func Execute(srcPath, folderFormat, generated, copyMode, verboseMode, groupMode string, workerCount int) {
 	if srcPath == "" {
 		fmt.Println("Please define a valid path")
 		os.Exit(0)
 	}
+
+	// Disable GC during heavy processing
+	debug.SetGCPercent(-1)
+	defer debug.SetGCPercent(100)
 
 	org := NewOrganizer(srcPath, folderFormat, generated, copyMode, verboseMode, groupMode)
 
@@ -114,7 +119,7 @@ func Execute(srcPath, folderFormat, generated, copyMode, verboseMode, groupMode 
 	}
 
 	org.AddFileEntries(org.SrcPath)
-	org.OrganizeFiles()
+	org.OrganizeFiles(workerCount)
 	org.Clear()
 }
 
@@ -181,70 +186,101 @@ func (o *Organizer) AddFileEntries(fromPath string) {
 }
 
 // OrganizeFiles creates the necessary folders and processes file entries (either sequentially or concurrently).
-func (o *Organizer) OrganizeFiles() {
+func (o *Organizer) OrganizeFiles(customWorkerCount int) {
 	if o.VerboseMode == "2" {
 		fmt.Printf("Generated folders: %d\n", len(o.dateFolders))
 		fmt.Printf("All processed file entries: %d\n", len(o.fEntries))
 	}
 
-	if len(o.dateFolders) > 0 {
-		// Create the main generated folder.
-		if err := o.genFolder(o.SrcPath, o.Generated); err != nil {
-			log.Printf("Error creating folder: %v", err)
-			return
+	if len(o.dateFolders) == 0 {
+		return
+	}
+
+	// Create the main generated folder.
+	if err := o.genFolder(o.SrcPath, o.Generated); err != nil {
+		log.Printf("Error creating folder: %v", err)
+		return
+	}
+
+	// Create subfolders for each date.
+	for dateKey := range o.dateFolders {
+		if err := o.genFolder(o.SrcPath, o.Generated, dateKey); err != nil {
+			log.Printf("Error creating subfolder: %v", err)
+		}
+	}
+
+	switch o.CopyMode {
+	case "seq":
+		o.groupWorker(0, len(o.fEntries)-1)
+	case "con":
+		numWorkers := customWorkerCount
+		if numWorkers <= 0 {
+			numWorkers = maxParallelism()
 		}
 
-		// Create subfolders for each date.
-		for dateKey := range o.dateFolders {
-			if err := o.genFolder(o.SrcPath, o.Generated, dateKey); err != nil {
-				log.Printf("Error creating subfolder: %v", err)
-			}
-		}
-
-		switch o.CopyMode {
-		case "seq":
-			o.groupWorker(0, len(o.fEntries)-1)
-		case "con":
-			numWorkers := maxParallelism()
-			if o.VerboseMode == "1" {
-				fmt.Println("Number of workers:", numWorkers)
-			}
-
-			// Ensure we don't create more workers than we have files
-			if numWorkers > len(o.fEntries) {
-				numWorkers = len(o.fEntries)
-			}
-
-			// Calculate proper segment size to ensure all files are processed
-			var wg sync.WaitGroup
-			filesPerWorker := (len(o.fEntries) + numWorkers - 1) / numWorkers // ceiling division
-
-			for i := 0; i < numWorkers; i++ {
-				start := i * filesPerWorker
-				if start >= len(o.fEntries) {
-					break // No more files to process
-				}
-
-				end := start + filesPerWorker - 1
-				if end >= len(o.fEntries) {
-					end = len(o.fEntries) - 1
-				}
-
-				wg.Add(1)
-				go func(routine, startIdx, endIdx int) {
-					defer wg.Done()
-					if o.VerboseMode == "1" {
-						fmt.Printf("Worker %d processing from %d to %d\n", routine, startIdx, endIdx)
-					}
-					o.groupWorker(startIdx, endIdx)
-				}(i, start, end)
-			}
-			wg.Wait()
+		// Ensure we don't create more workers than we have files
+		if numWorkers > len(o.fEntries) {
+			numWorkers = len(o.fEntries)
 		}
 
 		if o.VerboseMode == "1" {
-			fmt.Println("Processed file entries count:", len(o.fEntries))
+			fmt.Println("Number of workers:", numWorkers)
 		}
+
+		// Create work queue and semaphore for limiting concurrent disk operations
+		fileQueue := make(chan FileData, len(o.fEntries))
+		semaphore := make(chan struct{}, numWorkers*2) // Allow twice as many queued operations
+
+		// Fill the work queue with all files
+		for _, fileEntry := range o.fEntries {
+			fileQueue <- fileEntry
+		}
+		close(fileQueue)
+
+		// Create a WaitGroup to wait for all workers
+		var wg sync.WaitGroup
+		wg.Add(numWorkers)
+
+		// Start workers
+		for i := 0; i < numWorkers; i++ {
+			go func(workerID int) {
+				defer wg.Done()
+				processedCount := 0
+				startTime := time.Now()
+
+				// Process files from the queue
+				for fileEntry := range fileQueue {
+					// Acquire semaphore slot
+					semaphore <- struct{}{}
+
+					if o.VerboseMode == "1" && processedCount%100 == 0 && processedCount > 0 {
+						elapsed := time.Since(startTime)
+						fmt.Printf("Worker %d processed %d files (%.2f files/sec)\n",
+							workerID, processedCount, float64(processedCount)/elapsed.Seconds())
+					}
+
+					// Process the file
+					o.processFile(fileEntry)
+					processedCount++
+
+					// Release semaphore slot
+					<-semaphore
+				}
+
+				if o.VerboseMode == "1" {
+					elapsed := time.Since(startTime)
+					fmt.Printf("Worker %d finished - processed %d files in %s (%.2f files/sec)\n",
+						workerID, processedCount, elapsed, float64(processedCount)/elapsed.Seconds())
+				}
+			}(i)
+		}
+
+		// Wait for all workers to complete
+		wg.Wait()
+	}
+
+	if o.VerboseMode == "1" {
+		fmt.Println("Processed file entries count:", len(o.fEntries))
 	}
 }
 
@@ -292,7 +328,27 @@ func (o *Organizer) groupWorker(start, end int) {
 	}
 }
 
-// copy copies a file from src to dst.
+// processFile processes a single file entry according to the group mode
+func (o *Organizer) processFile(fileEntry FileData) {
+	if o.VerboseMode == "1" {
+		fmt.Printf("%s processing file: %s -> %s\n", o.GroupMode, fileEntry.Path, fileEntry.NewPath)
+	}
+
+	switch o.GroupMode {
+	case "copy":
+		_, err := o.copy(fileEntry.Path, fileEntry.NewPath)
+		if err != nil {
+			log.Printf("Error copying file: %v", err)
+		}
+	case "move":
+		_, err := o.move(fileEntry.Path, fileEntry.NewPath)
+		if err != nil {
+			log.Printf("Error moving file: %v", err)
+		}
+	}
+}
+
+// copy copies a file from src to dst with buffered I/O for performance
 func (o *Organizer) copy(src, dst string) (int64, error) {
 	// Create destination directory if it doesn't exist
 	dstDir := filepath.Dir(dst)
@@ -312,7 +368,9 @@ func (o *Organizer) copy(src, dst string) (int64, error) {
 	}
 	defer destination.Close()
 
-	nBytes, err := io.Copy(destination, source)
+	// Use a larger buffer for better performance
+	buf := make([]byte, 1024*1024) // 1MB buffer
+	nBytes, err := io.CopyBuffer(destination, source, buf)
 	return nBytes, err
 }
 
