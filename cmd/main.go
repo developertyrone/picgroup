@@ -15,8 +15,15 @@ var (
 )
 
 func main() {
-	// Add version flag
+	// Define command-line flags
 	versionFlag := flag.Bool("version", false, "Print version information")
+	srcPath := flag.String("d", "", "Directory path (absolute path)")
+	folderFormat := flag.String("f", "ymd", "Folder format (ymd/ym)")
+	generated := flag.String("t", "generated", "Generated folder name")
+	groupMode := flag.String("g", "move", "Grouping mode (move/copy)")
+	copyMode := flag.String("m", "seq", "File copy mode (seq/con)")
+	verboseMode := flag.String("v", "0", "Verbose mode (0/1)")
+
 	flag.Parse()
 
 	// Check if version flag was provided
@@ -25,9 +32,6 @@ func main() {
 		os.Exit(0)
 	}
 
-	// Execute sets up flags, instantiates the Organizer and runs it.
-	organizer.Execute()
-
-	// Optionally you might want to exit with a non-zero code on error.
-	os.Exit(0)
+	// Execute the organizer with parsed flag values
+	organizer.Execute(*srcPath, *folderFormat, *generated, *copyMode, *verboseMode, *groupMode)
 }

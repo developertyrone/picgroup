@@ -1,7 +1,6 @@
 package organizer
 
 import (
-	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -101,24 +100,14 @@ func NewOrganizer(srcPath, folderFormat, generated, copyMode, verboseMode, group
 	}
 }
 
-// Execute parses the command-line flags, creates an Organizer, and runs the organization process.
-func Execute() {
-	// Command-line flags.
-	srcPathInput := flag.String("d", ".", "Directory path (absolute path)")
-	formatInput := flag.String("f", "ymd", "Folder format (ymd/ym)")
-	generatedInput := flag.String("t", "generated", "Generated folder name")
-	groupModeInput := flag.String("g", "move", "Grouping mode (move/copy)")
-	copyModeInput := flag.String("m", "seq", "File copy mode (seq/con)")
-	verboseInput := flag.String("v", "0", "Verbose mode (0/1)")
-
-	flag.Parse()
-
-	if *srcPathInput == "." {
-		fmt.Println("Please define a path with -d and -h for help")
+// Execute creates an Organizer with the provided parameters and runs the organization process.
+func Execute(srcPath, folderFormat, generated, copyMode, verboseMode, groupMode string) {
+	if srcPath == "" {
+		fmt.Println("Please define a valid path")
 		os.Exit(0)
 	}
 
-	org := NewOrganizer(*srcPathInput, *formatInput, *generatedInput, *copyModeInput, *verboseInput, *groupModeInput)
+	org := NewOrganizer(srcPath, folderFormat, generated, copyMode, verboseMode, groupMode)
 
 	if org.VerboseMode == "1" {
 		defer trackTime(time.Now(), "process")
@@ -220,14 +209,27 @@ func (o *Organizer) OrganizeFiles() {
 			if o.VerboseMode == "1" {
 				fmt.Println("Number of workers:", numWorkers)
 			}
+
+			// Ensure we don't create more workers than we have files
+			if numWorkers > len(o.fEntries) {
+				numWorkers = len(o.fEntries)
+			}
+
+			// Calculate proper segment size to ensure all files are processed
 			var wg sync.WaitGroup
-			segment := len(o.fEntries) / numWorkers
-			for i := 0; i <= len(o.fEntries)/numWorkers; i++ {
-				start := i * segment
-				end := (i+1)*segment - 1
+			filesPerWorker := (len(o.fEntries) + numWorkers - 1) / numWorkers // ceiling division
+
+			for i := 0; i < numWorkers; i++ {
+				start := i * filesPerWorker
+				if start >= len(o.fEntries) {
+					break // No more files to process
+				}
+
+				end := start + filesPerWorker - 1
 				if end >= len(o.fEntries) {
 					end = len(o.fEntries) - 1
 				}
+
 				wg.Add(1)
 				go func(routine, startIdx, endIdx int) {
 					defer wg.Done()
