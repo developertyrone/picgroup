@@ -80,22 +80,5 @@ jobs:
             
             ### Linux
             - [Linux (64-bit)](https://github.com/developertyrone/picgroup/releases/download/v${{ env.VERSION }}/picgroup-linux-amd64.zip)
-            ### macOS
-            - [Linux (32-bit)](https://github.com/developertyrone/picgroup/releases/download/v${{ env.VERSION }}/picgroup-linux-386.zip)
-            - [Linux (ARM64)](https://github.com/developertyrone/picgroup/releases/download/v${{ env.VERSION }}/picgroup-linux-arm64.zip)
-
-            - [macOS (Intel)](https://github.com/developertyrone/picgroup/releases/download/v${{ env.VERSION }}/picgroup-macos-amd64.zip)
-            - [macOS (Apple Silicon)](https://github.com/developertyrone/picgroup/releases/download/v${{ env.VERSION }}/picgroup-macos-arm64.zip)
-            
-            ### Linux
-            - [Linux (64-bit)](https://github.com/developertyrone/picgroup/releases/download/v${{ env.VERSION }}/picgroup-linux-amd64.zip)
-            - [Linux (32-bit)](https://github.com/developertyrone/picgroup/releases/download/v${{ env.VERSION }}/picgroup-linux-386.zip)
-            - [Linux (ARM64)](https://github.com/developertyrone/picgroup/releases/download/v${{ env.VERSION }}/picgroup-linux-arm64.zip)
-
-            - [macOS (Intel)](https://github.com/developertyrone/picgroup/releases/download/v${{ env.VERSION }}/picgroup-macos-amd64.zip)
-            - [macOS (Apple Silicon)](https://github.com/developertyrone/picgroup/releases/download/v${{ env.VERSION }}/picgroup-macos-arm64.zip)
-            
-            ### Linux
-            - [Linux (64-bit)](https://github.com/developertyrone/picgroup/releases/download/v${{ env.VERSION }}/picgroup-linux-amd64.zip)
             - [Linux (32-bit)](https://github.com/developertyrone/picgroup/releases/download/v${{ env.VERSION }}/picgroup-linux-386.zip)
             - [Linux (ARM64)](https://github.com/developertyrone/picgroup/releases/download/v${{ env.VERSION }}/picgroup-linux-arm64.zip)
