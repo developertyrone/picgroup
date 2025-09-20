@@ -15,7 +15,6 @@ import (
 	"github.com/dsoprea/go-exif/v3"
 	"github.com/tidwall/gjson"
 
-	"encoding/json"
 	"runtime/debug"
 )
 
