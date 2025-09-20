@@ -108,9 +108,15 @@ func Execute(srcPath, folderFormat, generated, copyMode, verboseMode, groupMode 
 		os.Exit(0)
 	}
 
-	// Disable GC during heavy processing
-	debug.SetGCPercent(-1)
-	defer debug.SetGCPercent(100)
+	// Limit CPU usage to prevent macOS security from killing the process
+	runtime.GOMAXPROCS(4)
+
+	// Disable GC during heavy processing (but run manual GC periodically)
+	originalGCPercent := debug.SetGCPercent(-1)
+	defer debug.SetGCPercent(originalGCPercent)
+
+	// Run manual GC every 1000 files to prevent excessive memory usage
+	fileCount := 0
 
 	org := NewOrganizer(srcPath, folderFormat, generated, copyMode, verboseMode, groupMode)
 
@@ -118,7 +124,7 @@ func Execute(srcPath, folderFormat, generated, copyMode, verboseMode, groupMode 
 		defer trackTime(time.Now(), "process")
 	}
 
-	org.AddFileEntries(org.SrcPath)
+	org.AddFileEntries(org.SrcPath, &fileCount)
 	org.OrganizeFiles(workerCount)
 	org.Clear()
 }
@@ -130,7 +136,7 @@ func (o *Organizer) Clear() {
 }
 
 // AddFileEntries recursively scans the given directory and adds eligible file entries.
-func (o *Organizer) AddFileEntries(fromPath string) {
+func (o *Organizer) AddFileEntries(fromPath string, fileCount *int) {
 	entries, err := os.ReadDir(fromPath)
 	if err != nil {
 		panic(err)
@@ -145,7 +151,7 @@ func (o *Organizer) AddFileEntries(fromPath string) {
 		if entry.IsDir() {
 			// Avoid rescanning the generated folder or hidden directories.
 			if entry.Name() != o.Generated && !strings.HasPrefix(entry.Name(), ".") && !strings.HasPrefix(entry.Name(), "@") {
-				o.AddFileEntries(fullPath)
+				o.AddFileEntries(fullPath, fileCount)
 			}
 		} else {
 			fileInfo, err := entry.Info()
@@ -180,6 +186,11 @@ func (o *Organizer) AddFileEntries(fromPath string) {
 					NewPath: path.Join(o.SrcPath, o.Generated, newFolder, filepath.Base(fullPath)),
 				})
 				o.dateFolders[newFolder] = true
+				*fileCount++
+				// Run manual GC every 1000 files to manage memory
+				if *fileCount%1000 == 0 {
+					runtime.GC()
+				}
 			}
 		}
 	}
@@ -216,6 +227,10 @@ func (o *Organizer) OrganizeFiles(customWorkerCount int) {
 		numWorkers := customWorkerCount
 		if numWorkers <= 0 {
 			numWorkers = maxParallelism()
+			// Cap workers to prevent maxing out CPU and triggering macOS security
+			if numWorkers > 4 {
+				numWorkers = 4
+			}
 		}
 
 		// Ensure we don't create more workers than we have files
@@ -262,6 +277,14 @@ func (o *Organizer) OrganizeFiles(customWorkerCount int) {
 					// Process the file
 					o.processFile(fileEntry)
 					processedCount++
+
+					// Run manual GC every 100 files to manage memory
+					if processedCount%100 == 0 {
+						runtime.GC()
+					}
+
+					// Add small delay to prevent overwhelming CPU
+					time.Sleep(1 * time.Millisecond)
 
 					// Release semaphore slot
 					<-semaphore
