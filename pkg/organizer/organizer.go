@@ -29,37 +29,36 @@ func defaultReadMediaInfo(filePath string) string {
 	case ".JPG", ".JPEG", ".PNG", ".ARW":
 		rawExif, err := exif.SearchFileAndExtractExif(filePath)
 		if err != nil {
-			log.Printf("No EXIF in %s: %v", filePath, err)
 			return ""
 		}
 		flatExif, _, err := exif.GetFlatExifData(rawExif, nil)
 		if err != nil {
-			log.Printf("Error retrieving EXIF data for %s: %v", filePath, err)
 			return ""
 		}
-		metadata := make(map[string]string)
-		// Look for DateTimeOriginal first.
+		
+		// Only extract the date we need, don't store all metadata
+		var dateTimeOriginal string
 		for _, item := range flatExif {
 			if item.TagName == "DateTimeOriginal" {
-				metadata["DateTimeOriginal"] = item.FormattedFirst
+				dateTimeOriginal = item.FormattedFirst
 				break
 			}
 		}
-		// Fallback to DateTime if DateTimeOriginal is not available.
-		if metadata["DateTimeOriginal"] == "" {
+		// Fallback to DateTime if DateTimeOriginal is not available
+		if dateTimeOriginal == "" {
 			for _, item := range flatExif {
 				if item.TagName == "DateTime" {
-					metadata["DateTimeOriginal"] = item.FormattedFirst
+					dateTimeOriginal = item.FormattedFirst
 					break
 				}
 			}
 		}
-		jsonBytes, err := json.Marshal(metadata)
-		if err != nil {
-			log.Printf("Error marshaling EXIF metadata for %s: %v", filePath, err)
-			return ""
+		
+		if dateTimeOriginal != "" {
+			// Return minimal JSON with just the date
+			return fmt.Sprintf(`{"DateTimeOriginal":"%s"}`, dateTimeOriginal)
 		}
-		return string(jsonBytes)
+		return ""
 	default:
 		return ""
 	}
@@ -67,10 +66,9 @@ func defaultReadMediaInfo(filePath string) string {
 
 // --- Core types and constructor ---
 
-// FileData holds information about a file entry to be organized.
+// FileData holds minimal information about a file entry to be organized.
 type FileData struct {
 	Path    string
-	Info    os.FileInfo
 	NewPath string
 }
 
@@ -111,12 +109,9 @@ func Execute(srcPath, folderFormat, generated, copyMode, verboseMode, groupMode 
 	// Limit CPU usage to prevent macOS security from killing the process
 	runtime.GOMAXPROCS(4)
 
-	// Disable GC during heavy processing (but run manual GC periodically)
-	originalGCPercent := debug.SetGCPercent(-1)
-	defer debug.SetGCPercent(originalGCPercent)
-
-	// Run manual GC every 1000 files to prevent excessive memory usage
-	fileCount := 0
+	// Keep GC enabled but tune it for better memory management
+	debug.SetGCPercent(20) // More aggressive GC
+	defer debug.SetGCPercent(100)
 
 	org := NewOrganizer(srcPath, folderFormat, generated, copyMode, verboseMode, groupMode)
 
@@ -124,8 +119,12 @@ func Execute(srcPath, folderFormat, generated, copyMode, verboseMode, groupMode 
 		defer trackTime(time.Now(), "process")
 	}
 
-	org.AddFileEntries(org.SrcPath, &fileCount)
-	org.OrganizeFiles(workerCount)
+	// First pass: scan and create folders
+	org.ScanAndCreateFolders(org.SrcPath)
+	
+	// Second pass: process files in streaming batches
+	org.ProcessFilesInBatches(org.SrcPath, workerCount)
+	
 	org.Clear()
 }
 
@@ -135,33 +134,103 @@ func (o *Organizer) Clear() {
 	o.fEntries = make([]FileData, 0)
 }
 
-// AddFileEntries recursively scans the given directory and adds eligible file entries.
-func (o *Organizer) AddFileEntries(fromPath string, fileCount *int) {
-	entries, err := os.ReadDir(fromPath)
-	if err != nil {
-		panic(err)
+// ScanAndCreateFolders does a lightweight scan to create all needed folders without loading files into memory
+func (o *Organizer) ScanAndCreateFolders(fromPath string) {
+	o.scanForDateFolders(fromPath)
+	
+	// Create the main generated folder
+	if err := o.genFolder(o.SrcPath, o.Generated); err != nil {
+		log.Printf("Error creating main folder: %v", err)
+		return
 	}
 
+	// Create subfolders for each date
+	for dateKey := range o.dateFolders {
+		if err := o.genFolder(o.SrcPath, o.Generated, dateKey); err != nil {
+			log.Printf("Error creating subfolder: %v", err)
+		}
+	}
+	
 	if o.VerboseMode == "1" {
-		fmt.Printf("%s has %d files\n", fromPath, len(entries))
+		fmt.Printf("Created %d date folders\n", len(o.dateFolders))
+	}
+}
+
+// scanForDateFolders recursively scans to find date folders needed, without storing file data
+func (o *Organizer) scanForDateFolders(fromPath string) {
+	entries, err := os.ReadDir(fromPath)
+	if err != nil {
+		log.Printf("Error reading directory %s: %v", fromPath, err)
+		return
 	}
 
 	for _, entry := range entries {
 		fullPath := path.Join(fromPath, entry.Name())
 		if entry.IsDir() {
-			// Avoid rescanning the generated folder or hidden directories.
 			if entry.Name() != o.Generated && !strings.HasPrefix(entry.Name(), ".") && !strings.HasPrefix(entry.Name(), "@") {
-				o.AddFileEntries(fullPath, fileCount)
+				o.scanForDateFolders(fullPath)
 			}
 		} else {
-			fileInfo, err := entry.Info()
-			if err != nil {
-				log.Println("Failed to get file info:", err)
-				continue
-			}
-
+			// We don't need fileInfo, just check if we can read EXIF
 			infoStr := o.readMediaInfo(fullPath)
-			log.Printf("infoStr:%s\n %s\n", fullPath, infoStr)
+			if infoStr != "" {
+				dateTimeOriginal := gjson.Get(infoStr, "DateTimeOriginal").String()
+				createTime, err := time.Parse("2006:01:02 15:04:05", dateTimeOriginal)
+				if err != nil {
+					continue
+				}
+
+				var newFolder string
+				switch o.FolderFormat {
+				case "ymd":
+					newFolder = createTime.Format("20060102")
+				case "ym":
+					newFolder = createTime.Format("200601")
+				default:
+					newFolder = createTime.Format("20060102")
+				}
+				o.dateFolders[newFolder] = true
+			}
+		}
+	}
+}
+// ProcessFilesInBatches processes files in small batches to keep memory usage low
+func (o *Organizer) ProcessFilesInBatches(fromPath string, workerCount int) {
+	const batchSize = 100 // Small batch size to keep memory low
+	
+	o.processDirectoryInBatches(fromPath, batchSize, workerCount)
+}
+
+// processDirectoryInBatches recursively processes directories in small batches
+func (o *Organizer) processDirectoryInBatches(fromPath string, batchSize, workerCount int) {
+	entries, err := os.ReadDir(fromPath)
+	if err != nil {
+		log.Printf("Error reading directory %s: %v", fromPath, err)
+		return
+	}
+
+	if o.VerboseMode == "1" {
+		fmt.Printf("Processing %s with %d entries\n", fromPath, len(entries))
+	}
+
+	batch := make([]FileData, 0, batchSize)
+	
+	for _, entry := range entries {
+		fullPath := path.Join(fromPath, entry.Name())
+		if entry.IsDir() {
+			// Process current batch before recursing
+			if len(batch) > 0 {
+				o.processBatch(batch, workerCount)
+				batch = batch[:0] // Clear batch
+				runtime.GC() // Force GC between batches
+			}
+			
+			if entry.Name() != o.Generated && !strings.HasPrefix(entry.Name(), ".") && !strings.HasPrefix(entry.Name(), "@") {
+				o.processDirectoryInBatches(fullPath, batchSize, workerCount)
+			}
+		} else {
+			// Only read EXIF metadata, don't store file info
+			infoStr := o.readMediaInfo(fullPath)
 			if infoStr != "" {
 				dateTimeOriginal := gjson.Get(infoStr, "DateTimeOriginal").String()
 				createTime, err := time.Parse("2006:01:02 15:04:05", dateTimeOriginal)
@@ -180,19 +249,78 @@ func (o *Organizer) AddFileEntries(fromPath string, fileCount *int) {
 					newFolder = createTime.Format("20060102")
 				}
 
-				o.fEntries = append(o.fEntries, FileData{
+				batch = append(batch, FileData{
 					Path:    fullPath,
-					Info:    fileInfo,
 					NewPath: path.Join(o.SrcPath, o.Generated, newFolder, filepath.Base(fullPath)),
 				})
-				o.dateFolders[newFolder] = true
-				*fileCount++
-				// Run manual GC every 1000 files to manage memory
-				if *fileCount%1000 == 0 {
-					runtime.GC()
+
+				// Process batch when it reaches the size limit
+				if len(batch) >= batchSize {
+					o.processBatch(batch, workerCount)
+					batch = batch[:0] // Clear batch
+					runtime.GC() // Force GC between batches
 				}
 			}
 		}
+	}
+
+	// Process remaining files in the final batch
+	if len(batch) > 0 {
+		o.processBatch(batch, workerCount)
+		runtime.GC()
+	}
+}
+
+// processBatch processes a small batch of files
+func (o *Organizer) processBatch(batch []FileData, workerCount int) {
+	if len(batch) == 0 {
+		return
+	}
+	
+	if o.VerboseMode == "1" {
+		fmt.Printf("Processing batch of %d files\n", len(batch))
+	}
+
+	switch o.CopyMode {
+	case "seq":
+		for i := range batch {
+			o.processFile(batch[i])
+		}
+	case "con":
+		// Limit workers for small batches
+		numWorkers := workerCount
+		if numWorkers <= 0 {
+			numWorkers = 2 // Use only 2 workers for batches
+		}
+		if numWorkers > len(batch) {
+			numWorkers = len(batch)
+		}
+		if numWorkers > 4 { // Cap at 4 to prevent CPU overload
+			numWorkers = 4
+		}
+
+		fileQueue := make(chan FileData, len(batch))
+		var wg sync.WaitGroup
+
+		// Fill queue
+		for _, fileEntry := range batch {
+			fileQueue <- fileEntry
+		}
+		close(fileQueue)
+
+		// Start workers
+		wg.Add(numWorkers)
+		for i := 0; i < numWorkers; i++ {
+			go func() {
+				defer wg.Done()
+				for fileEntry := range fileQueue {
+					o.processFile(fileEntry)
+					time.Sleep(2 * time.Millisecond) // Small delay to prevent CPU overload
+				}
+			}()
+		}
+
+		wg.Wait()
 	}
 }
 
@@ -391,8 +519,8 @@ func (o *Organizer) copy(src, dst string) (int64, error) {
 	}
 	defer destination.Close()
 
-	// Use a larger buffer for better performance
-	buf := make([]byte, 1024*1024) // 1MB buffer
+	// Use a smaller buffer to reduce memory footprint
+	buf := make([]byte, 64*1024) // 64KB buffer instead of 1MB
 	nBytes, err := io.CopyBuffer(destination, source, buf)
 	return nBytes, err
 }
